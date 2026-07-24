@@ -264,7 +264,9 @@
         "photorealistic, 8k, high quality, masterpiece, ",
         ", highly detailed, hdr, 360 panorama",
         534800367512468,
-        "randomize"
+        "randomize",
+        "",
+        "5m"
       ],
       "color": "#233",
       "bgcolor": "#355"
@@ -334,7 +336,9 @@
         "llava",
         0.1,
         487757589654250,
-        "randomize"
+        "randomize",
+        "",
+        "5m"
       ],
       "color": "#233",
       "bgcolor": "#355"

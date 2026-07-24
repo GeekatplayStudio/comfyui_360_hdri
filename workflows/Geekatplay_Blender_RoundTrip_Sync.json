@@ -290,7 +290,6 @@
         "Node name for S&R": "SaveAndSendPBRToBlender"
       },
       "widgets_values": [
-        "",
         "127.0.0.1",
         8119
       ]

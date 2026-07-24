@@ -330,7 +330,9 @@
       "widgets_values": [
         "preset:walk",
         "biped",
-        ""
+        "",
+        "mixamo",
+        false
       ]
     },
     {
@@ -478,7 +480,14 @@
         "",
         "v3.0-20250812",
         "original_image",
-        "standard"
+        "standard",
+        "detailed",
+        false,
+        0,
+        "randomize",
+        0,
+        "randomize",
+        true
       ]
     },
     {
@@ -522,7 +531,10 @@
         "Node name for S&R": "Geekatplay_ApiKey_Manager"
       },
       "widgets_values": [
-        "None"
+        "None",
+        "Read/Select",
+        "Meshy",
+        ""
       ]
     }
   ],

@@ -84,11 +84,9 @@
       },
       "widgets_values": [
         "None",
+        "Read/Select",
         "meshy_api_key",
-        "MyService",
-        "",
-        "Save",
-        "Delete"
+        ""
       ]
     },
     {
@@ -184,7 +182,19 @@
       },
       "widgets_values": [
         true,
-        ""
+        "",
+        "standard",
+        "latest",
+        "triangle",
+        30000,
+        false,
+        true,
+        "auto",
+        "default",
+        false,
+        "",
+        false,
+        true
       ]
     },
     {
@@ -285,6 +295,19 @@
         "preview",
         "realistic",
         "ugly, blurry, low quality",
+        "",
+        "latest",
+        "standard",
+        "triangle",
+        30000,
+        false,
+        "auto",
+        "default",
+        false,
+        0,
+        "randomize",
+        true,
+        false,
         ""
       ]
     },

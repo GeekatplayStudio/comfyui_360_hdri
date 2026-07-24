@@ -167,7 +167,9 @@
         "Top down, color texture",
         "Top down aerial texture map, highly detailed 16-bit, ",
         838185056459651,
-        "randomize"
+        "randomize",
+        "",
+        "5m"
       ]
     },
     {
@@ -214,7 +216,9 @@
         "Top down, DEM style image. Heigh need to be white, lower need to be black. top view, map view",
         "Top down aerial 3D heightmap depth map, greyscale, highly detailed 16-bit, ",
         913945536751640,
-        "randomize"
+        "randomize",
+        "",
+        "5m"
       ]
     },
     {
