@@ -199,14 +199,14 @@ def main():
         except ImportError:
             print("Requests library not installed yet (will be installed with requirements). Skipping service check.")
 
-        # Pull llava model
-        print("Pulling 'llava' model (this may take a while)...")
+        # Pull the current multimodal default used by the nodes.
+        print("Pulling 'gemma3' model (this may take a while)...")
         try:
-            run_command("ollama pull llava")
-            print("Model 'llava' pulled successfully.")
+            run_command("ollama pull gemma3")
+            print("Model 'gemma3' pulled successfully.")
         except Exception as e:
             print(f"Failed to pull model: {e}")
-            print("You may need to run 'ollama pull llava' manually.")
+            print("You may need to run 'ollama pull gemma3' manually.")
 
     # 8. Symlink or copy the suite
     target_suite_path = custom_nodes_path / "ComfyUI-Blender-Toolbox"

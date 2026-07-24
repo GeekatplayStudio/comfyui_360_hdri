@@ -9,6 +9,9 @@ build/
 repos/
 
 geekatplay_keystore.enc
+geekatplay_keystore.enc.migrated
+geekatplay_keystore.json
+tripo_config.json
 
 AUTO_RIGGER_PLAN.md
 docs/EXTERNAL_RIGGING_PLAN.md

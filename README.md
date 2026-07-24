@@ -30,6 +30,22 @@ git clone https://github.com/GeekAtPlay/ComfyUI_Blender_toolbox
 ### 3. Install Dependencies & Models
 This suite contains standard nodes and the advanced AI PBR Extractor. The standard dependencies are installed automatically by ComfyUI Manager.
 
+For a manual installation, use the Python interpreter that launches ComfyUI:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Version 2.0 requires Python 3.10 or newer. Restart ComfyUI after installing or upgrading.
+
+### API authentication
+
+Add a **Credential Manager (OS Keyring)** node and use its **Save credential** button. Secrets are stored by the operating-system credential vault (Windows Credential Manager, macOS Keychain, or the configured Linux Secret Service), not in workflow JSON.
+
+Recommended credential names are `Meshy`, `Tripo`, `HiTem3D`, and `Ollama Cloud`. Connect the manager's `api_key` output to the corresponding service node. Existing `geekatplay_keystore.enc` credentials are migrated to the OS vault once and the old file is renamed with a `.migrated` suffix.
+
+Tripo can also read `TRIPO_API_KEY` from the environment. Ollama requires no key for a local `http://localhost:11434` server; direct `https://ollama.com` access accepts a connected API key.
+
 #### **Required AI Models**
 Some workflows require specific models to be placed in your ComfyUI folders.
 
@@ -328,35 +344,44 @@ A set of nodes to integrate leading AI Text-to-3D and Image-to-3D services direc
 **Note**: These services require API keys. Use the included **API Key Manager** to securely manage them.
 
 #### **Geekatplay API Key Manager**
-*Category: `Geekatplay Studio/3D Generators`*
-Securely stores and retrieves API keys for Tripo, Meshy, and HiTem3D.
-*   **Secure**: Keys are stored obfuscated.
-*   **Convenient**: Select stored keys from a dropdown in all supported nodes.
+*Category: `Geekatplay/Authentication`*
+Stores and retrieves credentials for Tripo, Meshy, HiTem3D, and Ollama Cloud.
+*   **Secure storage**: Secret values live in the operating-system credential vault. Only credential names are stored by the extension.
+*   **Safer UI**: Secret entry uses a password field, and the list updates without refreshing ComfyUI.
+*   **Migration**: Legacy XOR-obfuscated credentials are migrated automatically.
 
 #### **Tripo3D Model Generator**
-*Category: `Geekatplay Studio/Tripo3D`*
-Generate 3D models using Tripo's API v2.5/v3.0.
+*Category: `Geekatplay/Tripo3D`*
+Generate 3D models using Tripo's current v3 API.
 *   **Inputs**: Single image or Multi-view images.
-*   **Features**: PBR materials, Quad mesh option, Auto-scale.
+*   **Models**: H3.1, P1 low-poly, and H3.0.
+*   **Features**: PBR materials, detailed/extreme textures, geometry quality, seeds, quad output, auto-scale, and image auto-fix.
 
 #### **Tripo3D Animator**
-*Category: `Geekatplay Studio/Tripo3D`*
-Auto-rig and animate your Tripo models.
-*   **Presets**: Walk, Run, Jump, Dance, etc.
-*   **Rigging**: Auto, Biped, Quadruped.
+*Category: `Geekatplay/Tripo3D`*
+Uses Tripo v3 rig-check, rig, and animation-retarget endpoints.
+*   **Presets**: Idle, walk, run, dive, climb, jump, combat, and quadruped walk.
+*   **Rigging**: Automatic detection, biped, or quadruped with Mixamo/Tripo skeleton output.
 
 #### **Meshy Text/Image to 3D**
-*Category: `Geekatplay Studio/Meshy`*
-Access Meshy.ai's powerful 3D generation.
-*   **Text to 3D**: Prompt-based generation with style selection (Realistic, Cartoon, Low-poly, Voxel).
-*   **Image to 3D**: Converts uploaded images to detailed 3D meshes using Meshy v1 API.
+*Category: `Geekatplay/Meshy`*
+Access Meshy.ai through its current OpenAPI endpoints. Add a Meshy API key through the API Key Manager or directly on the node.
+*   **Text to 3D**: Meshy 5/6 preview generation, with an automatic Preview → Refine sequence when textured output is selected.
+*   **Image to 3D**: Standard or Smart Topology generation from a ComfyUI image.
+*   **Output controls**: Remeshing, polygon target, pose, PBR maps, HD textures, lighting removal, and texture prompts.
+*   Generated GLB files are saved under `ComfyUI/output/meshy_models/`.
 
 #### **HiTem3D Generator**
-*Category: `Geekatplay Studio/HiTem3D`*
+*Category: `Geekatplay/HiTem3D`*
 Generate high-fidelity models using HiTem3D.
 *   **Modes**: Geometry Only, Staged, All-in-One.
-*   **Resolution**: Supports up to 1536pro resolution.
+*   **Models**: HiTem3D 1.5/2.0/2.1 and Scene Portrait 1.5/2.0/2.1.
+*   **Resolution**: Includes the current fast/pro resolution modes and optional PBR output.
 *   **Input**: Supports single-view or multi-view (Front, Back, Left, Right).
+
+#### **Ollama Vision and Lighting**
+*Category: `Geekatplay Studio/Ollama`*
+Supports current multimodal Ollama models such as `gemma3`, configurable keep-alive, local servers without authentication, and Ollama Cloud with bearer authentication.
 
 ---
 

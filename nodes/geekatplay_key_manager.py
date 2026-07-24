@@ -1,175 +1,224 @@
-import os
-import json
+"""Credential management backed by the operating-system keyring."""
+
 import base64
+import json
+import os
+import re
 from itertools import cycle
-from server import PromptServer
+
+import keyring
 from aiohttp import web
+from keyring.errors import KeyringError
+from server import PromptServer
 
-# Path to the encrypted key store
-KEY_STORE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "geekatplay_keystore.enc")
-OBFUSCATION_KEY = "GeekatplayStudio_Secure_Key_Salt_2026"
 
-def xor_crypt_string(data, key=OBFUSCATION_KEY, encode=False):
-    """Simple XOR obfuscation to prevent cleartext storage."""
-    # Ensure key length matches data if possible or cycle
-    if encode:
-        # XOR then Base64
-        try:
-            xored = ''.join(chr(ord(x) ^ ord(y)) for (x, y) in zip(data, cycle(key)))
-            return base64.b64encode(xored.encode('utf-8')).decode('utf-8')
-        except Exception as e:
-            print(f"Encryption error: {e}")
-            return ""
-    else:
-        # Base64 decode then XOR
-        try:
-            if not data: return ""
-            decoded_b64 = base64.b64decode(data).decode('utf-8')
-            return ''.join(chr(ord(x) ^ ord(y)) for (x, y) in zip(decoded_b64, cycle(key)))
-        except Exception as e:
-            print(f"Decryption error: {e}")
-            return ""
+KEYRING_SERVICE = "ComfyUI-Blender-Toolbox"
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+KEY_INDEX_PATH = os.path.join(ROOT_DIR, "geekatplay_keystore.json")
+LEGACY_STORE_PATH = os.path.join(ROOT_DIR, "geekatplay_keystore.enc")
+LEGACY_OBFUSCATION_KEY = "GeekatplayStudio_Secure_Key_Salt_2026"
+MAX_NAME_LENGTH = 80
+MAX_SECRET_LENGTH = 8192
+
+
+def _validate_name(name):
+    normalized = str(name or "").strip()
+    if not normalized or len(normalized) > MAX_NAME_LENGTH:
+        raise ValueError(f"Credential name must contain 1-{MAX_NAME_LENGTH} characters")
+    if not re.fullmatch(r"[A-Za-z0-9_. @+-]+", normalized):
+        raise ValueError("Credential name contains unsupported characters")
+    return normalized
+
+
+def _read_index():
+    try:
+        with open(KEY_INDEX_PATH, "r", encoding="utf-8") as index:
+            data = json.load(index)
+        return sorted({_validate_name(item) for item in data.get("keys", [])})
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"[Geekatplay KeyManager] Could not read credential index: {exc}")
+        return []
+
+
+def _write_index(names):
+    temporary_path = KEY_INDEX_PATH + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as index:
+        json.dump({"version": 2, "keys": sorted(set(names))}, index, indent=2)
+    os.replace(temporary_path, KEY_INDEX_PATH)
+
+
+def _decode_legacy_store(encoded):
+    decoded = base64.b64decode(encoded).decode("utf-8")
+    return "".join(
+        chr(ord(value) ^ ord(key))
+        for value, key in zip(decoded, cycle(LEGACY_OBFUSCATION_KEY))
+    )
+
+
+def migrate_legacy_store():
+    """Move legacy XOR-obfuscated credentials into the OS keyring once."""
+    if not os.path.exists(LEGACY_STORE_PATH):
+        return
+    try:
+        with open(LEGACY_STORE_PATH, "r", encoding="utf-8") as legacy:
+            keys = json.loads(_decode_legacy_store(legacy.read()))
+        for name, value in keys.items():
+            save_key(name, value)
+        os.replace(LEGACY_STORE_PATH, LEGACY_STORE_PATH + ".migrated")
+        print("[Geekatplay KeyManager] Migrated legacy credentials to the OS keyring.")
+    except Exception as exc:
+        print(f"[Geekatplay KeyManager] Legacy credential migration failed: {exc}")
+
+
+def list_keys():
+    migrate_legacy_store()
+    return _read_index()
+
 
 def load_keys():
-    if not os.path.exists(KEY_STORE_PATH):
-        return {}
-    try:
-        with open(KEY_STORE_PATH, 'r') as f:
-            encrypted_data = f.read()
-            json_str = xor_crypt_string(encrypted_data, encode=False)
-            if not json_str: return {}
-            return json.loads(json_str)
-    except Exception as e:
-        print(f"Error loading keystore: {e}")
-        return {}
+    """Compatibility helper. Secrets are fetched from the keyring on demand."""
+    result = {}
+    for name in list_keys():
+        try:
+            secret = keyring.get_password(KEYRING_SERVICE, name)
+        except KeyringError as exc:
+            raise RuntimeError(f"OS credential vault is unavailable: {exc}") from exc
+        if secret is not None:
+            result[name] = secret
+    return result
+
 
 def save_key(name, value):
-    keys = load_keys()
-    keys[name] = value
-    json_str = json.dumps(keys)
-    encrypted_data = xor_crypt_string(json_str, encode=True)
-    with open(KEY_STORE_PATH, 'w') as f:
-        f.write(encrypted_data)
+    name = _validate_name(name)
+    secret = str(value or "").strip()
+    if not secret or len(secret) > MAX_SECRET_LENGTH:
+        raise ValueError(f"Credential value must contain 1-{MAX_SECRET_LENGTH} characters")
+    try:
+        keyring.set_password(KEYRING_SERVICE, name, secret)
+    except KeyringError as exc:
+        raise RuntimeError(f"Could not save credential in the OS vault: {exc}") from exc
+    names = _read_index()
+    if name not in names:
+        names.append(name)
+        _write_index(names)
+
 
 def delete_key(name):
-    keys = load_keys()
-    if name in keys:
-        del keys[name]
-        json_str = json.dumps(keys)
-        encrypted_data = xor_crypt_string(json_str, encode=True)
-        with open(KEY_STORE_PATH, 'w') as f:
-            f.write(encrypted_data)
+    name = _validate_name(name)
+    try:
+        keyring.delete_password(KEYRING_SERVICE, name)
+    except keyring.errors.PasswordDeleteError:
+        pass
+    except KeyringError as exc:
+        raise RuntimeError(f"Could not delete credential from the OS vault: {exc}") from exc
+    _write_index(item for item in _read_index() if item != name)
 
-# Register API routes for the JS frontend
+
+def get_key(name):
+    if not name or name == "None":
+        return ""
+    name = _validate_name(name)
+    try:
+        return keyring.get_password(KEYRING_SERVICE, name) or ""
+    except KeyringError as exc:
+        raise RuntimeError(f"Could not read credential from the OS vault: {exc}") from exc
+
+
 if hasattr(PromptServer, "instance"):
     routes = PromptServer.instance.routes
-    
-    @routes.post("/geekatplay/save_key")
+
+    @routes.post("/geekatplay/credentials")
     async def save_key_endpoint(request):
         try:
-            json_data = await request.json()
-            key_name = json_data.get("name")
-            key_value = json_data.get("value")
-            
-            if not key_name or not key_value:
-                return web.json_response({"status": "error", "message": "Missing name or value"}, status=400)
-                
-            save_key(key_name, key_value)
-            return web.json_response({"status": "success"})
-        except Exception as e:
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
+            payload = await request.json()
+            save_key(payload.get("name"), payload.get("value"))
+            return web.json_response({"status": "success", "keys": list_keys()})
+        except (ValueError, json.JSONDecodeError) as exc:
+            return web.json_response({"status": "error", "message": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
 
-    @routes.post("/geekatplay/delete_key")
+    @routes.delete("/geekatplay/credentials/{name}")
     async def delete_key_endpoint(request):
         try:
-            json_data = await request.json()
-            key_name = json_data.get("name")
-            
-            if not key_name:
-                return web.json_response({"status": "error", "message": "Missing name"}, status=400)
-                
-            delete_key(key_name)
-            return web.json_response({"status": "success"})
-        except Exception as e:
-            return web.json_response({"status": "error", "message": str(e)}, status=500)
+            delete_key(request.match_info["name"])
+            return web.json_response({"status": "success", "keys": list_keys()})
+        except ValueError as exc:
+            return web.json_response({"status": "error", "message": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    @routes.get("/geekatplay/credentials")
+    async def list_keys_endpoint(request):
+        return web.json_response({"keys": list_keys(), "storage": "os-keyring"})
+
+    # Backward-compatible endpoints for older cached frontend files.
+    @routes.post("/geekatplay/save_key")
+    async def legacy_save_key_endpoint(request):
+        return await save_key_endpoint(request)
+
+    @routes.post("/geekatplay/delete_key")
+    async def legacy_delete_key_endpoint(request):
+        try:
+            payload = await request.json()
+            delete_key(payload.get("name"))
+            return web.json_response({"status": "success", "keys": list_keys()})
+        except Exception as exc:
+            return web.json_response({"status": "error", "message": str(exc)}, status=400)
 
     @routes.get("/geekatplay/list_keys")
-    async def list_keys_endpoint(request):
-        keys = load_keys()
-        return web.json_response({"keys": list(keys.keys())})
+    async def legacy_list_keys_endpoint(request):
+        return await list_keys_endpoint(request)
+
 
 class Geekatplay_ApiKey_Manager:
     @classmethod
-    def INPUT_TYPES(s):
-        # Load keys to populate dropdown (server-side initial render)
-        keys = load_keys()
-        # Always include "None" to prevent validation errors if workflow has "None" saved
-        # but keys exist in the backend.
-        key_names = ["None"] + sorted(list(keys.keys()))
-            
+    def INPUT_TYPES(cls):
         return {
             "required": {
-                "service_name": (key_names, ),
-                # Mode switch is kept for backward compatibility and fallback
-                "mode": (["Read/Select", "SAVE New Key", "DELETE Selected"], {"default": "Read/Select"}),
+                "service_name": (["None", *list_keys()],),
+                "mode": (
+                    ["Read/Select", "SAVE New Key", "DELETE Selected"],
+                    {"default": "Read/Select"},
+                ),
             },
             "optional": {
-                # These remain for the fallback manual entry if JS fails or for automation
-                "new_key_name": ("STRING", {"default": "MyService"}),
-                "new_key_value": ("STRING", {"default": "", "multiline": False}),
-            }
+                "new_key_name": ("STRING", {"default": "Meshy"}),
+                "new_key_value": (
+                    "STRING",
+                    {"default": "", "multiline": False, "password": True},
+                ),
+            },
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("api_key",)
     FUNCTION = "manage_keys"
-    CATEGORY = "Geekatplay Studio/Utils"
+    CATEGORY = "Geekatplay/Authentication"
     OUTPUT_NODE = True
 
-    def manage_keys(self, service_name, mode, new_key_name="MyService", new_key_value=""):
-        keys = load_keys()
-        
+    def manage_keys(self, service_name, mode, new_key_name="Meshy", new_key_value=""):
         if mode == "SAVE New Key":
-            if new_key_name and new_key_value:
-                save_key(new_key_name, new_key_value.strip())
-                print(f"[Geekatplay KeyManager] Saved key for '{new_key_name}'. Please refresh browser to see in dropdown.")
-                return (new_key_value.strip(),)
-            else:
-                print(f"[Geekatplay KeyManager] Error: Name and Value required to save.")
-                return ("",)
-                
-        elif mode == "DELETE Selected":
-            if service_name in keys:
+            save_key(new_key_name, new_key_value)
+            return (new_key_value.strip(),)
+        if mode == "DELETE Selected":
+            if service_name != "None":
                 delete_key(service_name)
-                print(f"[Geekatplay KeyManager] Deleted key for '{service_name}'. Please refresh browser.")
-                return ("",)
-            else:
-                return ("",)
-                
-        else: # Read/Select
-            # Primary: Try to get from keystore
-            if service_name in keys:
-                return (keys[service_name],)
-            
-            # Fallback: If user entered a key in new_key_value but didn't save, use it (Pass-through mode)
-            # This helps when setting up first time and forgetting to switch mode
-            if new_key_value and new_key_value.strip():
-                 print(f"[Geekatplay KeyManager] Warning: Using direct key value because '{service_name}' was not found in keystore. Recommended: Switch mode to 'SAVE' to store it securely.")
-                 return (new_key_value.strip(),)
-                 
             return ("",)
+        direct_value = new_key_value.strip()
+        return (get_key(service_name) or direct_value,)
 
     @classmethod
-    def IS_CHANGED(s, service_name, mode, new_key_name, new_key_value):
-        # Force re-execution if mode is write/delete
+    def IS_CHANGED(cls, service_name, mode, new_key_name="", new_key_value=""):
         if mode != "Read/Select":
             return float("nan")
+        # Never include secret material in ComfyUI's change fingerprint.
         return service_name
 
-NODE_CLASS_MAPPINGS = {
-    "Geekatplay_ApiKey_Manager": Geekatplay_ApiKey_Manager
-}
 
+NODE_CLASS_MAPPINGS = {"Geekatplay_ApiKey_Manager": Geekatplay_ApiKey_Manager}
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Geekatplay_ApiKey_Manager": "API Key Manager (Geekatplay)"
+    "Geekatplay_ApiKey_Manager": "Credential Manager (OS Keyring)"
 }

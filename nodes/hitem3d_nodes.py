@@ -56,8 +56,9 @@ class HiTem3DAPIClient:
         except Exception as e:
             raise Exception(f"Failed to get HiTem3D access token: {str(e)}")
 
-    def create_task(self, front_image_bytes, back_image_bytes=None, left_image_bytes=None, right_image_bytes=None, 
-                    model="hitem3dv1.5", resolution=1024, face_count=1000000, output_format=2, request_type=3):
+    def create_task(self, front_image_bytes, back_image_bytes=None, left_image_bytes=None, right_image_bytes=None,
+                    model="hitem3dv2.1", resolution="1536fast", face_count=1000000,
+                    output_format=2, request_type=3, pbr=True):
         
         token = self._get_token()
         url = f"{self.base_url}/open-api/v1/submit-task"
@@ -70,6 +71,8 @@ class HiTem3DAPIClient:
             'face': str(face_count),
             'format': str(output_format)
         }
+        if model in {"hitem3dv2.0", "hitem3dv2.1", "scene-portraitv2.0", "scene-portraitv2.1"}:
+            data["pbr"] = "1" if pbr else "0"
 
         files = []
         # Multi-view check logic
@@ -81,6 +84,7 @@ class HiTem3DAPIClient:
             for i, img_bytes in enumerate(images_list):
                 if img_bytes is not None:
                     files.append(('multi_images', (f'{view_names[i]}.jpg', img_bytes, 'image/jpeg')))
+            data["multi_images_bit"] = "".join("1" if image is not None else "0" for image in images_list)
         else:
             files.append(('images', ('front.jpg', front_image_bytes, 'image/jpeg')))
 
@@ -142,17 +146,18 @@ class Geekatplay_HiTem3D_Gen:
         return {
             "required": {
                 "front_image": ("IMAGE",),
-                "model": (["hitem3dv1", "hitem3dv1.5", "hitem3dv2.0", "scene-portraitv1.5"], {"default": "hitem3dv1.5"}),
-                "resolution": ([512, 1024, 1536, "1536pro"], {"default": 1024}),
+                "model": (["hitem3dv2.1", "hitem3dv2.0", "hitem3dv1.5", "scene-portraitv2.1", "scene-portraitv2.0", "scene-portraitv1.5"], {"default": "hitem3dv2.1"}),
+                "resolution": (["512", "1024", "1536", "1536fast", "1536pro", "1536profast"], {"default": "1536fast"}),
                 "face_count": ("INT", {"default": 1000000, "min": 100000, "max": 2000000, "step": 10000}),
-                "output_format": (["obj", "glb", "stl", "fbx"], {"default": "glb"}),
+                "output_format": (["obj", "glb", "stl", "fbx", "usdz"], {"default": "glb"}),
                 "generation_type": (["geometry_only", "staged", "all_in_one"], {"default": "all_in_one"}),
+                "pbr": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "back_image": ("IMAGE",),
                 "left_image": ("IMAGE",),
                 "right_image": ("IMAGE",),
-                "api_key": ("STRING", {"multiline": False, "default": "", "label": "HiTem3D Key (Format: AccessKey:SecretKey)"}),
+                "api_key": ("STRING", {"multiline": False, "default": "", "password": True, "label": "HiTem3D Key (Format: AccessKey:SecretKey)"}),
             }
         }
 
@@ -162,7 +167,7 @@ class Geekatplay_HiTem3D_Gen:
     CATEGORY = "Geekatplay/HiTem3D"
 
     def generate(self, front_image, model, resolution, face_count, output_format, generation_type, 
-                 back_image=None, left_image=None, right_image=None, api_key=""):
+                 pbr=True, back_image=None, left_image=None, right_image=None, api_key=""):
         
         if not api_key or ":" not in api_key:
             raise Exception("Invalid HiTem3D API Key. Must be in format 'AccessKey:SecretKey'. Use the API Key Manager or input manually.")
@@ -171,9 +176,8 @@ class Geekatplay_HiTem3D_Gen:
         client = HiTem3DAPIClient(access_key.strip(), secret_key.strip())
         
         # Prepare params
-        fmt_map = {"obj": 1, "glb": 2, "stl": 3, "fbx": 4}
+        fmt_map = {"obj": 1, "glb": 2, "stl": 3, "fbx": 4, "usdz": 5}
         gen_map = {"geometry_only": 1, "staged": 2, "all_in_one": 3}
-        res_int = 1536 if resolution == "1536pro" else int(resolution)
         
         # Prepare Images
         front_bytes = tensor_to_bytes(front_image)
@@ -185,17 +189,18 @@ class Geekatplay_HiTem3D_Gen:
         task_id = client.create_task(
             front_bytes, back_bytes, left_bytes, right_bytes,
             model=model,
-            resolution=res_int,
+            resolution=resolution,
             face_count=face_count,
             output_format=fmt_map.get(output_format, 2),
-            request_type=gen_map.get(generation_type, 3)
+            request_type=gen_map.get(generation_type, 3),
+            pbr=pbr,
         )
         print(f"Task ID: {task_id}")
         
         result = client.poll_task(task_id)
         
         # Download
-        model_url = result.get('model_url') or result.get('mesh_url')
+        model_url = result.get('url') or result.get('model_url') or result.get('mesh_url')
         if not model_url:
              # Try other specific keys?
              # Based on API docs implied in client code: query_task returns dict.
@@ -218,10 +223,20 @@ class Geekatplay_HiTem3D_Gen:
         filepath = os.path.join(hitem_dir, filename)
         
         print(f"Downloading model to {filepath}...")
-        resp = requests.get(model_url, stream=True)
-        with open(filepath, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
+        partial_path = filepath + ".part"
+        try:
+            with requests.get(model_url, stream=True, timeout=(15, 120)) as resp:
+                resp.raise_for_status()
+                with open(partial_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+            if not os.path.getsize(partial_path):
+                raise RuntimeError("HiTem3D downloaded an empty model file")
+            os.replace(partial_path, filepath)
+        finally:
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
             
         return (filepath, task_id)
 

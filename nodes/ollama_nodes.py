@@ -10,6 +10,20 @@ import base64
 import json
 import re
 
+OLLAMA_TIMEOUT = (10, 300)
+
+def ollama_request(url, payload, api_key=""):
+    base_url = url.rstrip("/")
+    headers = {"Authorization": f"Bearer {api_key.strip()}"} if api_key.strip() else {}
+    response = requests.post(
+        f"{base_url}/api/generate",
+        json=payload,
+        headers=headers,
+        timeout=OLLAMA_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
 def tensor_to_base64(image_tensor):
     """
     Converts a ComfyUI image tensor (batch) to a base64 encoded PNG string.
@@ -30,13 +44,15 @@ class OllamaVision:
                 "images": ("IMAGE",),
                 "prompt": ("STRING", {"multiline": True, "default": "Describe the image."}),
                 "ollama_url": ("STRING", {"default": "http://127.0.0.1:11434"}),
-                "model": ("STRING", {"default": "llava"}),
+                "model": ("STRING", {"default": "gemma3"}),
                 "temperature": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.1}),
             },
             "optional": {
                 "prefix": ("STRING", {"multiline": True, "default": "photorealistic, 8k, high quality, masterpiece, "}),
                 "suffix": ("STRING", {"multiline": True, "default": ", highly detailed, hdr, 360 panorama"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "api_key": ("STRING", {"default": "", "password": True}),
+                "keep_alive": ("STRING", {"default": "5m"}),
             }
         }
 
@@ -44,7 +60,7 @@ class OllamaVision:
     FUNCTION = "analyze_image"
     CATEGORY = "Geekatplay Studio/Ollama"
 
-    def analyze_image(self, images, prompt, ollama_url, model, temperature, seed, prefix="", suffix=""):
+    def analyze_image(self, images, prompt, ollama_url, model, temperature, seed, prefix="", suffix="", api_key="", keep_alive="5m"):
         try:
             # Convert image to base64
             img_str = tensor_to_base64(images)
@@ -55,15 +71,14 @@ class OllamaVision:
                 "prompt": prompt,
                 "images": [img_str],
                 "stream": False,
+                "keep_alive": keep_alive,
                 "options": {
                     "temperature": temperature,
                     "seed": seed
                 }
             }
             
-            response = requests.post(f"{ollama_url}/api/generate", json=payload)
-            response.raise_for_status()
-            result = response.json()
+            result = ollama_request(ollama_url, payload, api_key)
             description = result.get("response", "")
             
             # Combine with prefix/suffix
@@ -80,9 +95,11 @@ class OllamaLightingEstimator:
             "required": {
                 "images": ("IMAGE",),
                 "ollama_url": ("STRING", {"default": "http://127.0.0.1:11434"}),
-                "model": ("STRING", {"default": "llava"}),
+                "model": ("STRING", {"default": "gemma3"}),
                 "temperature": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.1}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "api_key": ("STRING", {"default": "", "password": True}),
+                "keep_alive": ("STRING", {"default": "5m"}),
             }
         }
 
@@ -91,7 +108,7 @@ class OllamaLightingEstimator:
     FUNCTION = "estimate_lighting"
     CATEGORY = "Geekatplay Studio/Ollama"
 
-    def estimate_lighting(self, images, ollama_url, model, temperature, seed):
+    def estimate_lighting(self, images, ollama_url, model, temperature, seed, api_key="", keep_alive="5m"):
         # Prompt designed to get structured JSON output
         prompt = """Analyze the lighting in this image. 
         Estimate the sun position (azimuth and elevation), light intensity, and light color.
@@ -113,15 +130,14 @@ class OllamaLightingEstimator:
                 "images": [img_str],
                 "stream": False,
                 "format": "json", # Force JSON mode if supported by model/ollama version
+                "keep_alive": keep_alive,
                 "options": {
                     "temperature": temperature,
                     "seed": seed
                 }
             }
             
-            response = requests.post(f"{ollama_url}/api/generate", json=payload)
-            response.raise_for_status()
-            result = response.json()
+            result = ollama_request(ollama_url, payload, api_key)
             text_response = result.get("response", "")
             
             # Parse JSON
@@ -164,21 +180,6 @@ class OllamaLightingEstimator:
                 if col_match: color = col_match.group(1)
                 
                 print(f"OllamaLightingEstimator: Regex Fallback -> Az:{azimuth}, El:{elevation}, In:{intensity}, Col:{color}")
-                return (azimuth, elevation, intensity, color)
-                
-                # More robust regex to handle "Azimuth: 45" or "azimuth": 45
-                az_match = re.search(r'(?:azimuth|Azimuth)["\s:]+([\d\.]+)', text_response)
-                if az_match: azimuth = float(az_match.group(1))
-                
-                el_match = re.search(r'(?:elevation|Elevation)["\s:]+([\d\.]+)', text_response)
-                if el_match: elevation = float(el_match.group(1))
-                
-                int_match = re.search(r'(?:intensity|Intensity)["\s:]+([\d\.]+)', text_response)
-                if int_match: intensity = float(int_match.group(1))
-                
-                col_match = re.search(r'(?:color|Color)["\s:]+"?(#[A-Fa-f0-9]{6})"?', text_response)
-                if col_match: color = col_match.group(1)
-                
                 return (azimuth, elevation, intensity, color)
                 
         except Exception as e:

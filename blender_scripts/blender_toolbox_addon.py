@@ -4,7 +4,7 @@
 bl_info = {
     "name": "ComfyUI Blender Toolbox Sync",
     "author": "ComfyUI-Blender-Toolbox",
-    "version": (1, 1, 1),
+    "version": (2, 0, 0),
     "blender": (2, 80, 0),
     "location": "View3D > Sidebar > ComfyUI",
     "description": "Sync assets from ComfyUI to Blender",

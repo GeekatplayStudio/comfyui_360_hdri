@@ -1,292 +1,282 @@
-import requests
-import json
-import time
-import os
-import folder_paths
-import torch
-import numpy as np
-from PIL import Image
-from io import BytesIO
+"""ComfyUI nodes for the Tripo v3 API."""
 
-# Configuration helper
+import json
+import os
+import re
+import time
+from io import BytesIO
+from urllib.parse import urlparse
+
+import folder_paths
+import numpy as np
+import requests
+import torch
+from PIL import Image
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
 TRIPO_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tripo_config.json")
+REQUEST_TIMEOUT = (15, 120)
+
 
 def load_tripo_api_key():
-    if os.path.exists(TRIPO_CONFIG_PATH):
-        try:
-            with open(TRIPO_CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-                return config.get("tripo_api_key", "")
-        except:
-            pass
-    return ""
+    """Read environment first, then the legacy config without writing new plaintext secrets."""
+    environment_key = os.environ.get("TRIPO_API_KEY", "").strip()
+    if environment_key:
+        return environment_key
+    try:
+        with open(TRIPO_CONFIG_PATH, "r", encoding="utf-8") as config_file:
+            return str(json.load(config_file).get("tripo_api_key", "")).strip()
+    except (FileNotFoundError, OSError, ValueError):
+        return ""
 
-def save_tripo_api_key(key):
-    config = {}
-    if os.path.exists(TRIPO_CONFIG_PATH):
-        try:
-            with open(TRIPO_CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-        except:
-            pass
-    config["tripo_api_key"] = key
-    with open(TRIPO_CONFIG_PATH, 'w') as f:
-        json.dump(config, f, indent=4)
 
 def resolve_tripo_key(input_value):
-    """Resolves API Key from input or config. Handles masking."""
-    if input_value == "****************":
-        return load_tripo_api_key()
-    if input_value and input_value.strip():
-        # User provided a new key, save it
-        save_tripo_api_key(input_value)
-        return input_value
-    # Fallback to loading if empty
+    value = str(input_value or "").strip()
+    if value and value != "****************":
+        return value
     return load_tripo_api_key()
 
+
 def tensor2pil(image):
-    return Image.fromarray(np.clip(255. * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))
+    array = image.detach().cpu().numpy()
+    if array.ndim == 4:
+        array = array[0]
+    return Image.fromarray(np.clip(array * 255.0, 0, 255).astype(np.uint8)).convert("RGB")
+
+
+def _safe_task_id(task_id):
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id))
+
 
 class TripoAPI:
-    BASE_URL = "https://api.tripo3d.ai/v2/openapi"
+    BASE_URL = "https://openapi.tripo3d.com/v3"
 
-    def __init__(self, api_key):
-        self.api_key = api_key
-        self.headers = {
-            "Authorization": f"Bearer {api_key}"
-        }
+    def __init__(self, api_key, session=None):
+        if not api_key:
+            raise ValueError("Tripo API key is required")
+        self.session = session or self._make_session()
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "ComfyUI-Blender-Toolbox/1.2",
+            }
+        )
+
+    @staticmethod
+    def _make_session():
+        session = requests.Session()
+        retry = Retry(
+            total=4,
+            connect=4,
+            read=2,
+            status=4,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(("GET",)),
+            respect_retry_after_header=True,
+        )
+        session.mount("https://", HTTPAdapter(max_retries=retry))
+        return session
+
+    def _request(self, method, path, **kwargs):
+        try:
+            response = self.session.request(
+                method,
+                f"{self.BASE_URL}/{path.lstrip('/')}",
+                timeout=REQUEST_TIMEOUT,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Tripo request failed: {exc}") from exc
+        if not response.ok:
+            raise RuntimeError(f"Tripo API error ({response.status_code}): {response.text}")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Tripo returned invalid JSON") from exc
+        if payload.get("code", 0) != 0:
+            message = payload.get("message") or payload.get("error_message") or payload
+            raise RuntimeError(f"Tripo API error: {message}")
+        return payload.get("data", payload)
 
     def upload_image(self, image_tensor):
-        """Uploads a PIL image or Tensor to Tripo and returns the image_token."""
-        if isinstance(image_tensor, torch.Tensor):
-            pil_image = tensor2pil(image_tensor)
-        else:
-            pil_image = image_tensor
-
-        # Save to buffer
         buffer = BytesIO()
-        pil_image.save(buffer, format="PNG")
+        tensor2pil(image_tensor).save(buffer, format="PNG")
         buffer.seek(0)
-        
-        # Try the endpoint from the documentation example
-        # Example used: https://api.tripo3d.ai/v2/openapi/upload/sts
-        url = f"{self.BASE_URL}/upload/sts"
-        
-        files = {"file": ("image.png", buffer, "image/png")}
-        
-        response = requests.post(url, headers=self.headers, files=files)
-        
-        if response.status_code != 200:
-            # Fallback to upload/sts if 404 or similar, though unlikely for server-side
-            print(f"Tripo Upload Failed: {response.text}. Status: {response.status_code}")
-            raise Exception(f"Tripo API Error: {response.text}")
-            
-        data = response.json()
-        if data["code"] != 0:
-            raise Exception(f"Tripo API Error: {data}")
-            
-        return data["data"]["image_token"]
+        data = self._request(
+            "POST",
+            "files",
+            files={"file": ("image.png", buffer, "image/png")},
+        )
+        return data["file_token"]
 
-    def create_task(self, payload):
-        url = f"{self.BASE_URL}/task"
-        headers = self.headers.copy()
-        headers["Content-Type"] = "application/json"
-        
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code != 200:
-            raise Exception(f"Tripo Task Creation Failed: {response.text}")
-            
-        data = response.json()
-        if data["code"] != 0:
-            raise Exception(f"Tripo API Error: {data}")
-            
-        return data["data"]["task_id"]
+    def create_generation(self, endpoint, payload):
+        return self._request("POST", f"generation/{endpoint}", json=payload)["task_id"]
+
+    def create_animation(self, endpoint, payload):
+        return self._request("POST", f"animations/{endpoint}", json=payload)
 
     def get_task(self, task_id):
-        url = f"{self.BASE_URL}/task/{task_id}"
-        response = requests.get(url, headers=self.headers)
-        if response.status_code != 200:
-            raise Exception(f"Tripo Get Task Failed: {response.text}")
-        
-        data = response.json()
-        return data["data"]
+        return self._request("GET", f"tasks/{task_id}")
 
-    def poll_task(self, task_id, timeout=600):
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            task_data = self.get_task(task_id)
-            status = task_data["status"]
-            
+    def poll_task(self, task_id, timeout=900, poll_interval=3):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            task = self.get_task(task_id)
+            status = str(task.get("status", "")).lower()
             if status == "success":
-                return task_data
-            elif status == "failed":
-                raise Exception(f"Tripo Task Failed: {task_data}")
-            elif status == "cancelled":
-                raise Exception("Tripo Task Cancelled")
-                
-            time.sleep(2) # Poll every 2 seconds
-            
-        raise Exception("Tripo Task Timeout")
+                return task
+            if status in {"failed", "cancelled", "banned"}:
+                message = task.get("error_message") or task.get("error_code") or task
+                raise RuntimeError(f"Tripo task {status}: {message}")
+            time.sleep(poll_interval)
+        raise TimeoutError(f"Tripo task did not finish within {timeout} seconds")
+
+    def download_model(self, model_url, task_id, prefix="tripo"):
+        extension = os.path.splitext(urlparse(model_url).path)[1].lower()
+        if extension not in {".glb", ".fbx", ".obj", ".stl", ".usdz"}:
+            extension = ".glb"
+        output_dir = os.path.join(folder_paths.get_output_directory(), "tripo_models")
+        os.makedirs(output_dir, exist_ok=True)
+        filepath = os.path.join(output_dir, f"{prefix}_{_safe_task_id(task_id)}{extension}")
+        partial = filepath + ".part"
+        try:
+            with self.session.get(model_url, stream=True, timeout=REQUEST_TIMEOUT) as response:
+                response.raise_for_status()
+                with open(partial, "wb") as output:
+                    for chunk in response.iter_content(1024 * 1024):
+                        if chunk:
+                            output.write(chunk)
+            if not os.path.getsize(partial):
+                raise RuntimeError("Tripo downloaded an empty model file")
+            os.replace(partial, filepath)
+        finally:
+            if os.path.exists(partial):
+                os.remove(partial)
+        return filepath
+
 
 class Geekatplay_Tripo_ModelGen:
     @classmethod
-    def INPUT_TYPES(s):
-        # API Key is now mostly handled optionally or via connection
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "image_front": ("IMAGE",),
-                "face_limit": ("INT", {"default": 10000, "min": 500, "max": 20000, "label": "Max Polygon Count (Detail)"}),
-                "texture": ("BOOLEAN", {"default": True, "label": "Generate Texture"}),
-                "pbr": ("BOOLEAN", {"default": True, "label": "PBR Materials"}),
-                "quad": ("BOOLEAN", {"default": False, "label": "Quad Mesh (FBX Only)"}),
-                "auto_size": ("BOOLEAN", {"default": False, "label": "Auto Size (Real World)"}),
+                "face_limit": ("INT", {"default": 10000, "min": 50, "max": 20000}),
+                "texture": ("BOOLEAN", {"default": True}),
+                "pbr": ("BOOLEAN", {"default": True}),
+                "quad": ("BOOLEAN", {"default": False}),
+                "auto_size": ("BOOLEAN", {"default": False}),
             },
             "optional": {
-                "api_key": ("STRING", {"multiline": False, "default": "", "label": "Tripo API Key (Optional if Manager Connected)"}),
+                "api_key": ("STRING", {"default": "", "password": True}),
                 "image_left": ("IMAGE",),
                 "image_back": ("IMAGE",),
                 "image_right": ("IMAGE",),
-                "model_version": (["v2.5-20250123", "v3.0-20250812"], {"default": "v2.5-20250123"}),
-                "texture_alignment": (["original_image", "geometry"], {"default": "original_image"}),
-                "texture_quality": (["standard", "detailed"], {"default": "standard"}),
-            }
+                "model_version": (
+                    ["v3.1-20260211", "P1-20260311", "v3.0-20250812"],
+                    {"default": "v3.1-20260211"},
+                ),
+                "texture_alignment": (
+                    ["original_image", "geometry"],
+                    {"default": "original_image"},
+                ),
+                "texture_quality": (
+                    ["standard", "detailed", "extreme"],
+                    {"default": "detailed"},
+                ),
+                "geometry_quality": (
+                    ["standard", "detailed"],
+                    {"default": "detailed"},
+                ),
+                "enable_image_autofix": ("BOOLEAN", {"default": False}),
+                "model_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
+                "texture_seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
+                "export_uv": ("BOOLEAN", {"default": True}),
+            },
         }
-
 
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("model_path", "task_id")
     FUNCTION = "generate_model"
     CATEGORY = "Geekatplay/Tripo3D"
 
-    def generate_model(self, api_key, image_front, face_limit, texture, pbr, quad, auto_size,
-                      image_left=None, image_back=None, image_right=None, model_version="v2.5-20250123",
-                      texture_alignment="original_image", texture_quality="standard"):
-        
-        # Priority: 1. Input/Connection 2. Legacy config
-        key_to_use = ""
-        if api_key and api_key.strip():
-             # Check if it is a masked value (legacy config check)
-             if api_key == "****************":
-                 key_to_use = load_tripo_api_key()
-             else:
-                 key_to_use = api_key
-        else:
-             # Try legacy load
-             key_to_use = load_tripo_api_key()
+    def generate_model(
+        self, image_front, face_limit, texture, pbr, quad, auto_size, api_key="",
+        image_left=None, image_back=None, image_right=None,
+        model_version="v3.1-20260211", texture_alignment="original_image",
+        texture_quality="detailed", geometry_quality="detailed",
+        enable_image_autofix=False, model_seed=0, texture_seed=0, export_uv=True,
+    ):
+        tripo = TripoAPI(resolve_tripo_key(api_key))
+        views = {
+            "front": image_front,
+            "left": image_left,
+            "back": image_back,
+            "right": image_right,
+        }
+        tokens = {name: tripo.upload_image(image) for name, image in views.items() if image is not None}
+        options = {
+            "model": model_version,
+            "face_limit": face_limit,
+            "texture": texture or pbr,
+            "pbr": pbr,
+            "texture_alignment": texture_alignment,
+            "texture_quality": texture_quality,
+            "auto_size": auto_size,
+            "enable_image_autofix": enable_image_autofix,
+            "export_uv": export_uv,
+        }
+        if model_version != "P1-20260311":
+            options["geometry_quality"] = geometry_quality
+            options["quad"] = quad
+        if model_seed:
+            options["model_seed"] = model_seed
+        if texture_seed:
+            options["texture_seed"] = texture_seed
 
-        if not key_to_use:
-            raise Exception("Tripo API Key is required. Connect an API Key Manager or enter it manually.")
-            
-        tripo = TripoAPI(key_to_use)
-        
-        # Determine mode
-        # If any additional view is present, it's multiview
-        is_multiview = any([image_left is not None, image_back is not None, image_right is not None])
-        
-        files_config = []
-        
-        if is_multiview:
-            # Multiview expects 4 items: [front, left, back, right]
-            # Omit file_token for missing views
-            
-            # Front (Required)
-            token_front = tripo.upload_image(image_front)
-            files_config.append({"type": "png", "file_token": token_front})
-            
-            # Left
-            if image_left is not None:
-                token_left = tripo.upload_image(image_left)
-                files_config.append({"type": "png", "file_token": token_left})
-            else:
-                files_config.append({})
-                
-            # Back
-            if image_back is not None:
-                token_back = tripo.upload_image(image_back)
-                files_config.append({"type": "png", "file_token": token_back})
-            else:
-                files_config.append({})
-                
-            # Right
-            if image_right is not None:
-                token_right = tripo.upload_image(image_right)
-                files_config.append({"type": "png", "file_token": token_right})
-            else:
-                files_config.append({})
-                
-            payload = {
-                "type": "multiview_to_model",
-                "files": files_config,
-                "model_version": model_version,
-                "face_limit": face_limit,
-                "texture": texture,
-                "pbr": pbr,
-                "quad": quad,
-                "auto_size": auto_size,
-                "texture_alignment": texture_alignment,
-                "texture_quality": texture_quality
-            }
-            
+        if len(tokens) > 1:
+            options["inputs"] = [{name: token} for name, token in tokens.items()]
+            task_id = tripo.create_generation("multiview-to-model", options)
         else:
-            # Image to Model (Single View)
-            token_front = tripo.upload_image(image_front)
-            payload = {
-                "type": "image_to_model",
-                "file": {"type": "png", "file_token": token_front},
-                "model_version": model_version,
-                "face_limit": face_limit,
-                "texture": texture,
-                "pbr": pbr,
-                "quad": quad,
-                "auto_size": auto_size,
-                "texture_alignment": texture_alignment,
-                "texture_quality": texture_quality
-            }
+            options["input"] = tokens["front"]
+            task_id = tripo.create_generation("image-to-model", options)
 
-        # Submit Task
-        task_id = tripo.create_task(payload)
-        print(f"Tripo Task Submitted: {task_id}")
-        
-        # Poll for completion
         result = tripo.poll_task(task_id)
-        
-        # Download Result
-        output = result.get("output", {})
-        model_url = output.get("model") or output.get("pbr_model") or output.get("base_model") or output.get("original_model")
-
+        output = result.get("output") or {}
+        model_url = output.get("model_url") or output.get("pbr_model") or output.get("model")
         if not model_url:
-            raise Exception(f"Tripo Error: No model URL found in output. Available keys: {list(output.keys())}")
-        
-        # Save to Output Directory
-        output_dir = folder_paths.get_output_directory()
-        tripo_dir = os.path.join(output_dir, "tripo_models")
-        if not os.path.exists(tripo_dir):
-            os.makedirs(tripo_dir)
-            
-        # Determine extension
-        ext = ".fbx" if quad else ".glb"
-        filename = f"tripo_{task_id}{ext}"
-        filepath = os.path.join(tripo_dir, filename)
-        
-        print(f"Downloading model to {filepath}...")
-        model_resp = requests.get(model_url)
-        with open(filepath, "wb") as f:
-            f.write(model_resp.content)
-            
-        return (filepath, task_id)
+            raise RuntimeError(f"Tripo returned no model URL. Available fields: {list(output)}")
+        return tripo.download_model(model_url, task_id), task_id
+
 
 class Geekatplay_Tripo_AnimateRig:
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
-                "original_task_id": ("STRING", {"default": "", "multiline": False, "forceInput": True}),
-                "animation_preset": (["preset:idle", "preset:walk", "preset:run", "preset:jump", "preset:dance"], {"default": "preset:walk"}),
-                "rig_type": (["biped", "quadruped", "auto"], {"default": "biped"}),
+                "original_task_id": ("STRING", {"default": "", "forceInput": True}),
+                "animation_preset": (
+                    [
+                        "preset:idle", "preset:walk", "preset:run", "preset:dive",
+                        "preset:climb", "preset:jump", "preset:slash", "preset:shoot",
+                        "preset:hurt", "preset:fall", "preset:turn",
+                        "preset:quadruped:walk",
+                    ],
+                    {"default": "preset:walk"},
+                ),
+                "rig_type": (
+                    ["auto", "biped", "quadruped"],
+                    {"default": "auto"},
+                ),
             },
             "optional": {
-                "api_key": ("STRING", {"multiline": False, "default": "", "label": "Tripo API Key"}),
-            }
+                "api_key": ("STRING", {"default": "", "password": True}),
+                "skeleton_spec": (["mixamo", "tripo"], {"default": "mixamo"}),
+                "animate_in_place": ("BOOLEAN", {"default": False}),
+            },
         }
 
     RETURN_TYPES = ("STRING", "STRING")
@@ -294,93 +284,59 @@ class Geekatplay_Tripo_AnimateRig:
     FUNCTION = "animate_model"
     CATEGORY = "Geekatplay/Tripo3D"
 
-    def animate_model(self, api_key, original_task_id, animation_preset, rig_type):
-        # Priority: 1. Input/Connection 2. Legacy config
-        key_to_use = ""
-        if api_key and api_key.strip():
-             # Check if it is a masked value (legacy config check)
-             if api_key == "****************":
-                 key_to_use = load_tripo_api_key()
-             else:
-                 key_to_use = api_key
-        else:
-             # Try legacy load
-             key_to_use = load_tripo_api_key()
-            
-        if not key_to_use:
-            raise Exception("Tripo API Key is required. Connect an API Key Manager or enter it manually.")
+    def animate_model(
+        self, original_task_id, animation_preset, rig_type, api_key="",
+        skeleton_spec="mixamo", animate_in_place=False,
+    ):
+        if not original_task_id.strip():
+            raise ValueError("Original Tripo task ID is required")
+        tripo = TripoAPI(resolve_tripo_key(api_key))
+        selected_rig_type = rig_type
+        if rig_type == "auto":
+            check = tripo.create_animation("rig-check", {"input": original_task_id.strip()})
+            if check.get("riggable") is False:
+                raise RuntimeError("Tripo reports that this model cannot be rigged")
+            selected_rig_type = check.get("rig_type") or "biped"
 
-        if not original_task_id:
-            raise Exception("Original Task ID is required. Connect to ModelGen node.")
-            
-        tripo = TripoAPI(key_to_use)
-        
-        # Step 1: Pre-Rig Check (Optional but good for validation, but we'll skip to Rig for speed unless it fails)
-        # Actually Tripo split animate into Rig + Retarget under "animate" if we use the NEW v2 API.
-        
-        # Wait, the docs say: "The old animate interface is split into... animate = prerigcheck + rigging + retarget"
-        # So we likely need to chain them or use a wrapper?
-        # Actually, let's just use `animate_rig` then `animate_retarget`.
-        
-        # 1. Rig
-        # If rig_type is auto, we might need pre-rig check. For now assume biped or user selection.
-        rig_payload = {
-            "type": "animate_rig",
-            "original_model_task_id": original_task_id,
-            "out_format": "glb"
-        }
-        if rig_type != "auto":
-             rig_payload["rig_type"] = rig_type
-
-        print(f"Submitting Rig Task for {original_task_id}...")
-        rig_task_id = tripo.create_task(rig_payload)
-        rig_result = tripo.poll_task(rig_task_id)
-        
-        # Result of rig is a model. Now we Retarget (Apply Animation)
-        rigged_model_task_id = rig_task_id # The result of rigging is the input for retargeting?
-        # "original_model_task_id: The task_id of a rig task." -> YES.
-        
-        # 2. Retarget
-        retarget_payload = {
-            "type": "animate_retarget",
-            "original_model_task_id": rigged_model_task_id,
-            "out_format": "glb",
-            "animation": animation_preset
-        }
-        
-        print(f"Submitting Retarget Task (Animation: {animation_preset})...")
-        anim_task_id = tripo.create_task(retarget_payload)
-        anim_result = tripo.poll_task(anim_task_id)
-        
-        # Download Final Model
-        output = anim_result.get("output", {})
-        model_url = output.get("model") or output.get("pbr_model")
-
+        rig_data = tripo.create_animation(
+            "rig",
+            {
+                "input": original_task_id.strip(),
+                "rig_type": selected_rig_type,
+                "spec": skeleton_spec,
+                "out_format": "glb",
+            },
+        )
+        rig_task_id = rig_data["task_id"]
+        tripo.poll_task(rig_task_id)
+        animation_data = tripo.create_animation(
+            "retarget",
+            {
+                "input": rig_task_id,
+                "animation": animation_preset,
+                "out_format": "glb",
+                "bake_animation": True,
+                "animate_in_place": animate_in_place,
+            },
+        )
+        animation_task_id = animation_data["task_id"]
+        result = tripo.poll_task(animation_task_id)
+        output = result.get("output") or {}
+        model_url = output.get("model_url") or output.get("model")
         if not model_url:
-            raise Exception(f"Tripo Error: No animated model URL found. Available keys: {list(output.keys())}")
-        
-        # Save
-        output_dir = folder_paths.get_output_directory()
-        tripo_dir = os.path.join(output_dir, "tripo_models")
-        if not os.path.exists(tripo_dir):
-            os.makedirs(tripo_dir)
-            
-        filename = f"tripo_anim_{anim_task_id}.glb"
-        filepath = os.path.join(tripo_dir, filename)
-        
-        print(f"Downloading animated model to {filepath}...")
-        model_resp = requests.get(model_url)
-        with open(filepath, "wb") as f:
-            f.write(model_resp.content)
-            
-        return (filepath, anim_task_id)
+            urls = output.get("model_urls") or []
+            model_url = urls[0] if urls else None
+        if not model_url:
+            raise RuntimeError(f"Tripo returned no animated model URL: {list(output)}")
+        path = tripo.download_model(model_url, animation_task_id, prefix="tripo_anim")
+        return path, animation_task_id
+
 
 NODE_CLASS_MAPPINGS = {
     "Geekatplay_Tripo_ModelGen": Geekatplay_Tripo_ModelGen,
-    "Geekatplay_Tripo_AnimateRig": Geekatplay_Tripo_AnimateRig
+    "Geekatplay_Tripo_AnimateRig": Geekatplay_Tripo_AnimateRig,
 }
-
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Geekatplay_Tripo_ModelGen": "Tripo3D Model Generator (Geekatplay)",
-    "Geekatplay_Tripo_AnimateRig": "Tripo3D Animator (Geekatplay)"
+    "Geekatplay_Tripo_ModelGen": "Tripo v3 Image/Multi-View to 3D",
+    "Geekatplay_Tripo_AnimateRig": "Tripo v3 Auto-Rig & Animate",
 }
