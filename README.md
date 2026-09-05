@@ -4,12 +4,12 @@ A comprehensive suite of ComfyUI nodes designed for **3D Generation**, **Blender
 
 ## 🚀 Features at a Glance
 
-*   **AI 3D Model Generation**: Native support for **Tripo3D**, **Meshy**, and **HiTem3D**. Generate high-fidelity 3D models from text prompts or single/multi-view images directly in ComfyUI.
+*   **AI 3D Model Generation**: Native support for **Tripo3D** (v3, P2 quad topology), **Meshy** (meshy-7), and **Hi3D / HiTem3D** (v3.0 2048³ voxel). Generate high-fidelity 3D models from text prompts or single/multi-view images directly in ComfyUI.
 *   **AI 3D Animation & Rigging**: Automatically rig and animate characters using **Tripo3D's** animation API (Walk, Run, Dance, etc.).
 *   **PBR Material Extraction**: Turn any image into High-Quality PBR maps (Albedo, Normal, Roughness, Depth, Metallic) using **Ubisoft CHORD** AI.
 *   **360° Workflow**: Tools to resize, heal seams, and generate masks specifically for equirectangular images.
 *   **Seamless Tiling**: Two methods—Image-based edge blending and Model-based circular padding for true seamless generation.
-*   **Blender Bridge**: Live preview of your HDRI skies, Terrain heightmaps, and 3D Models directly in Blender.
+*   **Blender Bridge**: Live preview of your HDRI skies, Terrain heightmaps, and 3D Models directly in Blender with dynamic auto-detection for **Blender 5.0, 4.5, 4.x, and 3.6 LTS**.
 *   **Round-Trip Sync**: **NEW!** Send meshes/UVs from Blender to ComfyUI, texture them with AI, and send them back to Blender instantly.
 *   **Mesh Prep & Auto-Rig Export**: Local tools to Voxel Remesh, Decimate, and Export clean FBXs ready for external tools like Mixamo or AccuRig.
 *   **Ollama Vision**: Analyze images and suggest lighting/sun positions using local LLMs.
@@ -36,7 +36,7 @@ For a manual installation, use the Python interpreter that launches ComfyUI:
 python -m pip install -r requirements.txt
 ```
 
-Version 2.0 requires Python 3.10 or newer. Restart ComfyUI after installing or upgrading.
+Version 2.1 requires Python 3.10 or newer. Restart ComfyUI after installing or upgrading.
 
 ### API authentication
 
@@ -352,10 +352,11 @@ Stores and retrieves credentials for Tripo, Meshy, HiTem3D, and Ollama Cloud.
 
 #### **Tripo3D Model Generator**
 *Category: `Geekatplay/Tripo3D`*
-Generate 3D models using Tripo's current v3 API.
-*   **Inputs**: Single image or Multi-view images.
-*   **Models**: H3.1, P1 low-poly, and H3.0.
+Generate 3D models using Tripo's v3 API with automatic endpoint failover (`openapi.tripo3d.com` and `openapi.tripo3d.ai`).
+*   **Inputs**: Single image or Multi-view images (Front, Left, Back, Right).
+*   **Models**: `v3.1-20260211` (flagship high fidelity), `P2-20260801` (quad topology, game-ready), `P1-20260311`, `v3.0-20250812`, and `v2.5-20250123`.
 *   **Features**: PBR materials, detailed/extreme textures, geometry quality, seeds, quad output, auto-scale, and image auto-fix.
+*   **Authentication**: Resolves from node input, OS Keyring (`Tripo`), or `TRIPO_API_KEY` environment variable.
 
 #### **Tripo3D Animator**
 *Category: `Geekatplay/Tripo3D`*
@@ -365,19 +366,20 @@ Uses Tripo v3 rig-check, rig, and animation-retarget endpoints.
 
 #### **Meshy Text/Image to 3D**
 *Category: `Geekatplay/Meshy`*
-Access Meshy.ai through its current OpenAPI endpoints. Add a Meshy API key through the API Key Manager or directly on the node.
-*   **Text to 3D**: Meshy 5/6 preview generation, with an automatic Preview → Refine sequence when textured output is selected.
-*   **Image to 3D**: Standard or Smart Topology generation from a ComfyUI image.
-*   **Output controls**: Remeshing, polygon target, pose, PBR maps, HD textures, lighting removal, and texture prompts.
-*   Generated GLB files are saved under `ComfyUI/output/meshy_models/`.
+Access Meshy.ai through OpenAPI endpoints.
+*   **Text to 3D**: `meshy-7` (latest), `meshy-6`, and `meshy-5` preview generation, with an automatic Preview → Refine sequence when textured output is selected.
+*   **Image to 3D**: Standard or Smart Topology generation from a ComfyUI image (`meshy-7`, `meshy-6`, `meshy-t2`, etc.).
+*   **Output controls**: Remeshing, polygon target, pose, PBR maps, HD textures, lighting removal, texture prompts, and `.3mf` / `.glb` exports.
+*   **Authentication**: Resolves from node input, OS Keyring (`Meshy`), or `MESHY_API_KEY` environment variable.
 
-#### **HiTem3D Generator**
+#### **Hi3D / HiTem3D Generator**
 *Category: `Geekatplay/HiTem3D`*
-Generate high-fidelity models using HiTem3D.
+Generate production-ready models using Hi3D (formerly HiTem3D) with 3D print and game asset pipelines.
 *   **Modes**: Geometry Only, Staged, All-in-One.
-*   **Models**: HiTem3D 1.5/2.0/2.1 and Scene Portrait 1.5/2.0/2.1.
-*   **Resolution**: Includes the current fast/pro resolution modes and optional PBR output.
-*   **Input**: Supports single-view or multi-view (Front, Back, Left, Right).
+*   **Models**: `hitem3dv3.0` (2048³ voxel geometry), `hitem3dv2.1`, `hitem3dv2.0`, `hitem3dv1.5`, and `scene-portraitv2.1`/`v2.0`/`v1.5`.
+*   **Resolution**: 2048, 1536profast, 1536pro, 1536fast, 1536, 1024, 512, with PBR output.
+*   **Export Formats**: GLB, OBJ, STL, FBX, USDZ, and `.3mf` (slicer-ready for Bambu Studio, OrcaSlicer, etc.).
+*   **Authentication**: Dual-auth support—direct Bearer token (e.g. `hi3d_live_...`) or legacy `AccessKey:SecretKey`, with OS Keyring (`Hi3D` / `HiTem3D`) and `HI3D_API_KEY`/`HITEM3D_API_KEY` environment resolution.
 
 #### **Ollama Vision and Lighting**
 *Category: `Geekatplay Studio/Ollama`*

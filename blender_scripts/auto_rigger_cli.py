@@ -6,6 +6,7 @@ import json
 import time
 import urllib.request
 import urllib.parse
+import re
 from datetime import datetime
 
 bl_info = {
@@ -63,12 +64,34 @@ def run_blender_process(input_mesh, output_path, voxel_size=0.05):
     try:
         subprocess.run([blender_cmd, "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except (FileNotFoundError, subprocess.CalledProcessError):
-        # Try finding it in common windows path
+        # Try finding it in Blender Foundation or common paths
         common_paths = [
+            r"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe",
+            r"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe",
+            r"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe",
+            r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe",
+            r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
+            r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
             r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
             r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
             r"C:\Program Files\Blender Foundation\Blender 3.0\blender.exe"
         ]
+        bf_dir = r"C:\Program Files\Blender Foundation"
+        if os.path.exists(bf_dir):
+            try:
+                candidates = []
+                for entry in os.listdir(bf_dir):
+                    candidate_exe = os.path.join(bf_dir, entry, "blender.exe")
+                    if os.path.isfile(candidate_exe):
+                        match = re.search(r"(\d+(?:\.\d+)?)", entry)
+                        ver = float(match.group(1)) if match else 0.0
+                        candidates.append((ver, candidate_exe))
+                if candidates:
+                    candidates.sort(key=lambda x: x[0], reverse=True)
+                    common_paths = [c[1] for c in candidates] + common_paths
+            except Exception:
+                pass
+
         found = False
         for p in common_paths:
             if os.path.exists(p):

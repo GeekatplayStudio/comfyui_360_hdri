@@ -228,5 +228,38 @@ class HiTem3DTests(unittest.TestCase):
             
         os.remove(filepath)
 
+    def test_direct_bearer_token(self):
+        client = hitem3d_nodes.HiTem3DAPIClient(token="hi3d_live_direct_token")
+        token = client._get_token()
+        self.assertEqual(token, "hi3d_live_direct_token")
+
+    @patch("requests.post")
+    def test_create_task_v3_and_2048(self, mock_post):
+        client = hitem3d_nodes.HiTem3DAPIClient(token="direct_token")
+        mock_post.return_value = FakeResponse({
+            "code": 200,
+            "data": {
+                "task_id": "hitem-v3-task"
+            }
+        })
+        task_id = client.create_task(
+            front_image_bytes=b"front_img",
+            model="hitem3dv3.0",
+            resolution="2048",
+            pbr=True,
+            output_format=6
+        )
+        self.assertEqual(task_id, "hitem-v3-task")
+        args, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["data"]["model"], "hitem3dv3.0")
+        self.assertEqual(kwargs["data"]["resolution"], "2048")
+        self.assertEqual(kwargs["data"]["pbr"], "1")
+        self.assertEqual(kwargs["data"]["format"], "6")
+
+    def test_resolve_hitem3d_key(self):
+        with patch.dict(os.environ, {"HI3D_API_KEY": "env-hi3d-key"}):
+            self.assertEqual(hitem3d_nodes.resolve_hitem3d_key(""), "env-hi3d-key")
+
+
 if __name__ == "__main__":
     unittest.main()

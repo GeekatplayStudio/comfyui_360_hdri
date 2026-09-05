@@ -18,13 +18,40 @@ def tensor_to_bytes(tensor, format="JPEG"):
     pil_image.save(buffer, format=format)
     return buffer.getvalue()
 
+
+def load_hitem3d_api_key():
+    """Check environment variables HI3D_API_KEY, HITEM3D_API_KEY, and OS keyring."""
+    for env_var in ("HI3D_API_KEY", "HITEM3D_API_KEY"):
+        val = os.environ.get(env_var, "").strip()
+        if val:
+            return val
+    try:
+        try:
+            from .geekatplay_key_manager import get_key
+        except (ImportError, ValueError):
+            from nodes.geekatplay_key_manager import get_key
+        keyring_key = get_key("Hi3D") or get_key("HiTem3D") or get_key("hi3d") or get_key("hitem3d")
+        if keyring_key:
+            return keyring_key.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_hitem3d_key(input_value):
+    value = str(input_value or "").strip()
+    if value and value != "****************":
+        return value
+    return load_hitem3d_api_key()
+
+
 class HiTem3DAPIClient:
-    def __init__(self, access_key, secret_key, base_url="https://api.hitem3d.ai"):
+    def __init__(self, access_key=None, secret_key=None, token=None, base_url="https://api.hitem3d.ai"):
         self.access_key = access_key
         self.secret_key = secret_key
-        self.base_url = base_url.rstrip('/')
-        self.access_token = None
-        self.token_expires_at = 0
+        self.base_url = (base_url or "https://api.hitem3d.ai").rstrip('/')
+        self.access_token = token
+        self.token_expires_at = time.time() + 365 * 86400 if token else 0
 
     def _get_basic_auth_header(self):
         credentials = f"{self.access_key}:{self.secret_key}"
@@ -35,6 +62,11 @@ class HiTem3DAPIClient:
         current_time = time.time()
         if self.access_token and current_time < self.token_expires_at - 3600:
             return self.access_token
+
+        if not self.access_key or not self.secret_key:
+            if self.access_token:
+                return self.access_token
+            raise Exception("Hi3D / HiTem3D credentials missing. Provide an API token or 'AccessKey:SecretKey'.")
 
         url = f"{self.base_url}/open-api/v1/auth/token"
         headers = {
@@ -57,7 +89,7 @@ class HiTem3DAPIClient:
             raise Exception(f"Failed to get HiTem3D access token: {str(e)}")
 
     def create_task(self, front_image_bytes, back_image_bytes=None, left_image_bytes=None, right_image_bytes=None,
-                    model="hitem3dv2.1", resolution="1536fast", face_count=1000000,
+                    model="hitem3dv3.0", resolution="1536fast", face_count=1000000,
                     output_format=2, request_type=3, pbr=True):
         
         token = self._get_token()
@@ -71,7 +103,7 @@ class HiTem3DAPIClient:
             'face': str(face_count),
             'format': str(output_format)
         }
-        if model in {"hitem3dv2.0", "hitem3dv2.1", "scene-portraitv2.0", "scene-portraitv2.1"}:
+        if model in {"hitem3dv3.0", "hitem3dv2.0", "hitem3dv2.1", "scene-portraitv2.0", "scene-portraitv2.1"}:
             data["pbr"] = "1" if pbr else "0"
 
         files = []
@@ -89,8 +121,6 @@ class HiTem3DAPIClient:
             files.append(('images', ('front.jpg', front_image_bytes, 'image/jpeg')))
 
         response = requests.post(url, headers=headers, files=files, data=data, timeout=120)
-        
-        # Close generic file handles if used? Here we use bytes directly so requests handles it.
         
         if response.status_code != 200:
             raise Exception(f"HiTem3D Task Submit Failed: {response.text}")
@@ -134,7 +164,6 @@ class HiTem3DAPIClient:
                 
                 time.sleep(5)
             except Exception as e:
-                # If transient error, maybe continue? For now let's re-raise if meaningful
                 if "Failed" in str(e): raise e
                 time.sleep(5)
                 
@@ -146,10 +175,10 @@ class Geekatplay_HiTem3D_Gen:
         return {
             "required": {
                 "front_image": ("IMAGE",),
-                "model": (["hitem3dv2.1", "hitem3dv2.0", "hitem3dv1.5", "scene-portraitv2.1", "scene-portraitv2.0", "scene-portraitv1.5"], {"default": "hitem3dv2.1"}),
-                "resolution": (["512", "1024", "1536", "1536fast", "1536pro", "1536profast"], {"default": "1536fast"}),
+                "model": (["hitem3dv3.0", "hitem3dv2.1", "hitem3dv2.0", "hitem3dv1.5", "scene-portraitv2.1", "scene-portraitv2.0", "scene-portraitv1.5"], {"default": "hitem3dv3.0"}),
+                "resolution": (["2048", "1536profast", "1536pro", "1536fast", "1536", "1024", "512"], {"default": "1536fast"}),
                 "face_count": ("INT", {"default": 1000000, "min": 100000, "max": 2000000, "step": 10000}),
-                "output_format": (["obj", "glb", "stl", "fbx", "usdz"], {"default": "glb"}),
+                "output_format": (["glb", "obj", "stl", "fbx", "usdz", "3mf"], {"default": "glb"}),
                 "generation_type": (["geometry_only", "staged", "all_in_one"], {"default": "all_in_one"}),
                 "pbr": ("BOOLEAN", {"default": True}),
             },
@@ -157,7 +186,7 @@ class Geekatplay_HiTem3D_Gen:
                 "back_image": ("IMAGE",),
                 "left_image": ("IMAGE",),
                 "right_image": ("IMAGE",),
-                "api_key": ("STRING", {"multiline": False, "default": "", "password": True, "label": "HiTem3D Key (Format: AccessKey:SecretKey)"}),
+                "api_key": ("STRING", {"multiline": False, "default": "", "password": True, "label": "Hi3D / HiTem3D Key (Bearer Token or AccessKey:SecretKey)"}),
             }
         }
 
@@ -169,14 +198,18 @@ class Geekatplay_HiTem3D_Gen:
     def generate(self, front_image, model, resolution, face_count, output_format, generation_type, 
                  pbr=True, back_image=None, left_image=None, right_image=None, api_key=""):
         
-        if not api_key or ":" not in api_key:
-            raise Exception("Invalid HiTem3D API Key. Must be in format 'AccessKey:SecretKey'. Use the API Key Manager or input manually.")
+        resolved_key = resolve_hitem3d_key(api_key)
+        if not resolved_key:
+            raise Exception("Invalid Hi3D/HiTem3D API Key. Must be Bearer Token or 'AccessKey:SecretKey'. Use Credential Manager or set HI3D_API_KEY.")
             
-        access_key, secret_key = api_key.split(":", 1)
-        client = HiTem3DAPIClient(access_key.strip(), secret_key.strip())
+        if ":" in resolved_key:
+            access_key, secret_key = resolved_key.split(":", 1)
+            client = HiTem3DAPIClient(access_key=access_key.strip(), secret_key=secret_key.strip())
+        else:
+            client = HiTem3DAPIClient(token=resolved_key.strip())
         
         # Prepare params
-        fmt_map = {"obj": 1, "glb": 2, "stl": 3, "fbx": 4, "usdz": 5}
+        fmt_map = {"obj": 1, "glb": 2, "stl": 3, "fbx": 4, "usdz": 5, "3mf": 6}
         gen_map = {"geometry_only": 1, "staged": 2, "all_in_one": 3}
         
         # Prepare Images
@@ -200,17 +233,21 @@ class Geekatplay_HiTem3D_Gen:
         result = client.poll_task(task_id)
         
         # Download
-        model_url = result.get('url') or result.get('model_url') or result.get('mesh_url')
-        if not model_url:
-             # Try other specific keys?
-             # Based on API docs implied in client code: query_task returns dict.
-             # Client uses `result['data']` -> `state`. It doesn't show return format.
-             # Wait, usually `model_url` is in the data.
-             pass 
+        model_url = (
+            result.get('url')
+            or result.get('model_url')
+            or result.get('mesh_url')
+            or result.get('download_url')
+        )
+        if not model_url and isinstance(result.get('data'), dict):
+            inner = result['data']
+            model_url = (
+                inner.get('url')
+                or inner.get('model_url')
+                or inner.get('mesh_url')
+                or inner.get('download_url')
+            )
              
-        # Fallback if specific url key not found in top level
-        # Let's inspect typical response if we can.
-        # Assuming model_url is standard.
         if not model_url:
             raise Exception(f"No model URL found in HiTem3D response: {list(result.keys())}")
 

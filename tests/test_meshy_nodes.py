@@ -120,6 +120,30 @@ class MeshyNodeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "bad prompt"):
             api.poll_task("task-1", poll_interval=0)
 
+    def test_meshy_7_model_in_options(self):
+        text_inputs = meshy_nodes.Geekatplay_Meshy_TextTo3D.INPUT_TYPES()
+        self.assertIn("meshy-7", text_inputs["optional"]["ai_model"][0])
+        image_inputs = meshy_nodes.Geekatplay_Meshy_ImageTo3D.INPUT_TYPES()
+        self.assertIn("meshy-7", image_inputs["optional"]["ai_model"][0])
+
+    def test_download_3mf_format(self):
+        session = FakeSession()
+        session.responses.append(FakeResponse(content=b"3MF_CONTENT"))
+        path, task_id = meshy_nodes.download_meshy_model(
+            {"model_urls": {"3mf": "https://cdn.example/model.3mf"}},
+            "test_3mf",
+            preferred_format="3mf",
+            session=session,
+        )
+        self.assertTrue(path.endswith(".3mf"))
+        with open(path, "rb") as model:
+            self.assertEqual(model.read(), b"3MF_CONTENT")
+
+    def test_meshy_api_key_resolution(self):
+        with patch.dict(os.environ, {"MESHY_API_KEY": "env-secret-meshy"}):
+            resolved = meshy_nodes.resolve_meshy_key("")
+            self.assertEqual(resolved, "env-secret-meshy")
+
 
 if __name__ == "__main__":
     unittest.main()

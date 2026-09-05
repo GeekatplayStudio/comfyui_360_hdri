@@ -78,18 +78,44 @@ def download_meshy_model(result, task_id, preferred_format="glb", session=None):
     return filepath, str(task_id)
 
 
+def load_meshy_api_key():
+    """Read environment first, then OS keyring."""
+    environment_key = os.environ.get("MESHY_API_KEY", "").strip()
+    if environment_key:
+        return environment_key
+    try:
+        try:
+            from .geekatplay_key_manager import get_key
+        except (ImportError, ValueError):
+            from nodes.geekatplay_key_manager import get_key
+        keyring_key = get_key("Meshy") or get_key("meshy")
+        if keyring_key:
+            return keyring_key.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_meshy_key(input_value):
+    value = str(input_value or "").strip()
+    if value and value != "****************":
+        return value
+    return load_meshy_api_key()
+
+
 class MeshyAPI:
     BASE_URL = "https://api.meshy.ai/openapi"
 
     def __init__(self, api_key, session=None):
-        if not api_key or not api_key.strip():
+        resolved_key = resolve_meshy_key(api_key)
+        if not resolved_key:
             raise ValueError("Meshy API key is required")
         self.session = session or self._make_session()
         self.session.headers.update(
             {
-                "Authorization": f"Bearer {api_key.strip()}",
+                "Authorization": f"Bearer {resolved_key}",
                 "Content-Type": "application/json",
-                "User-Agent": "ComfyUI-Blender-Toolbox/1.2",
+                "User-Agent": "ComfyUI-Blender-Toolbox/2.1",
             }
         )
 
@@ -172,7 +198,7 @@ class Geekatplay_Meshy_TextTo3D:
             "optional": {
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
                 "api_key": ("STRING", {"multiline": False, "default": "", "password": True, "label": "Meshy API Key"}),
-                "ai_model": (["latest", "meshy-6", "meshy-5"], {"default": "latest"}),
+                "ai_model": (["latest", "meshy-7", "meshy-6", "meshy-5"], {"default": "latest"}),
                 "model_type": (["standard", "lowpoly"], {"default": "standard"}),
                 "topology": (["triangle", "quad"], {"default": "triangle"}),
                 "target_polycount": ("INT", {"default": 30000, "min": 100, "max": 300000}),
@@ -242,7 +268,7 @@ class Geekatplay_Meshy_ImageTo3D:
             "optional": {
                 "api_key": ("STRING", {"multiline": False, "default": "", "password": True, "label": "Meshy API Key"}),
                 "model_type": (["standard", "smart-topology"], {"default": "standard"}),
-                "ai_model": (["latest", "meshy-6", "meshy-5", "meshy-t2", "meshy-t1"], {"default": "latest"}),
+                "ai_model": (["latest", "meshy-7", "meshy-6", "meshy-5", "meshy-t2", "meshy-t1"], {"default": "latest"}),
                 "topology": (["triangle", "quad"], {"default": "triangle"}),
                 "target_polycount": ("INT", {"default": 30000, "min": 100, "max": 300000}),
                 "should_remesh": ("BOOLEAN", {"default": False}),

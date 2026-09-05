@@ -98,6 +98,14 @@ class TripoV3Tests(unittest.TestCase):
             "https://openapi.tripo3d.com/v3/tasks/task-1",
         )
 
+    def test_tripo_p2_model_options(self):
+        inputs = tripo.Geekatplay_Tripo_ModelGen.INPUT_TYPES()
+        self.assertIn("P2-20260801", inputs["optional"]["model_version"][0])
+
+    def test_tripo_key_resolution(self):
+        with patch.dict(os.environ, {"TRIPO_API_KEY": "env-tripo-key"}):
+            self.assertEqual(tripo.resolve_tripo_key(""), "env-tripo-key")
+
 
 class CredentialTests(unittest.TestCase):
     def setUp(self):

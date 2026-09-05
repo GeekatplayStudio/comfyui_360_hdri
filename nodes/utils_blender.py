@@ -18,29 +18,53 @@ def get_blender_path():
     Attempts to find Blender executable.
     Priorities:
     1. Environment Variable BLENDER_PATH
-    2. Common installation paths
-    3. PATH
+    2. Dynamic scan of Blender Foundation directories (sorted by newest version)
+    3. Common installation paths (Windows / macOS / Linux)
+    4. PATH
     """
     # 1. Check Env Var
     env_path = os.environ.get("BLENDER_PATH")
     if env_path and os.path.exists(env_path):
         return env_path
         
-    # 2. Check Common Paths (Windows)
+    # 2. Dynamic scan of Blender Foundation (Windows)
+    bf_dir = r"C:\Program Files\Blender Foundation"
+    if os.path.exists(bf_dir):
+        try:
+            candidates = []
+            for entry in os.listdir(bf_dir):
+                candidate_exe = os.path.join(bf_dir, entry, "blender.exe")
+                if os.path.isfile(candidate_exe):
+                    # Extract version number if available for sorting
+                    match = re.search(r"(\d+(?:\.\d+)?)", entry)
+                    ver = float(match.group(1)) if match else 0.0
+                    candidates.append((ver, candidate_exe))
+            if candidates:
+                candidates.sort(key=lambda x: x[0], reverse=True)
+                return candidates[0][1]
+        except Exception:
+            pass
+
+    # 3. Check Common Paths (Windows, Linux, macOS)
     common_paths = [
         r"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
         r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
+        "/usr/bin/blender",
+        "/usr/local/bin/blender",
+        "/snap/bin/blender",
+        "/Applications/Blender.app/Contents/MacOS/Blender",
     ]
     for p in common_paths:
         if os.path.exists(p):
             return p
             
-    # 3. Check PATH
+    # 4. Check PATH
     path_executable = shutil.which("blender")
     if path_executable:
         return path_executable
@@ -150,9 +174,12 @@ def run_blender_mesh_operation(input_mesh, blender_script_template, output_forma
             
         result_mesh = trimesh.load(output_path, process=False)
         
-        # If Scene (GLB often imports as Scene), dump
+        # If Scene (GLB often imports as Scene), convert to geometry
         if isinstance(result_mesh, trimesh.Scene):
-             result_mesh = result_mesh.dump(concatenate=True)
+             if hasattr(result_mesh, "to_geometry"):
+                 result_mesh = result_mesh.to_geometry()
+             else:
+                 result_mesh = result_mesh.dump(concatenate=True)
 
         return result_mesh
 

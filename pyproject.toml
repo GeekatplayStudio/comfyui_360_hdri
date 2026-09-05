@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-blender-toolbox"
 description = "A complete toolbox for 3D Gen, HDRI, PBR, and Blender synchronization in ComfyUI."
-version = "2.0.0"
+version = "2.1.0"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
@@ -25,3 +25,7 @@ Repository = "https://github.com/GeekatplayStudio/ComfyUI_Blender_toolbox"
 PublisherId = "GeekatplayStudio"
 DisplayName = "ComfyUI Blender Toolbox"
 Icon = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

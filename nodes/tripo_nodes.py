@@ -21,10 +21,20 @@ REQUEST_TIMEOUT = (15, 120)
 
 
 def load_tripo_api_key():
-    """Read environment first, then the legacy config without writing new plaintext secrets."""
+    """Read environment first, then OS keyring, then legacy config."""
     environment_key = os.environ.get("TRIPO_API_KEY", "").strip()
     if environment_key:
         return environment_key
+    try:
+        try:
+            from .geekatplay_key_manager import get_key
+        except (ImportError, ValueError):
+            from nodes.geekatplay_key_manager import get_key
+        keyring_key = get_key("Tripo") or get_key("Tripo3D") or get_key("tripo")
+        if keyring_key:
+            return keyring_key.strip()
+    except Exception:
+        pass
     try:
         with open(TRIPO_CONFIG_PATH, "r", encoding="utf-8") as config_file:
             return str(json.load(config_file).get("tripo_api_key", "")).strip()
@@ -52,6 +62,7 @@ def _safe_task_id(task_id):
 
 class TripoAPI:
     BASE_URL = "https://openapi.tripo3d.com/v3"
+    FALLBACK_URL = "https://openapi.tripo3d.ai/v3"
 
     def __init__(self, api_key, session=None):
         if not api_key:
@@ -60,7 +71,7 @@ class TripoAPI:
         self.session.headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
-                "User-Agent": "ComfyUI-Blender-Toolbox/1.2",
+                "User-Agent": "ComfyUI-Blender-Toolbox/2.1",
             }
         )
 
@@ -81,15 +92,27 @@ class TripoAPI:
         return session
 
     def _request(self, method, path, **kwargs):
+        endpoint_path = path.lstrip('/')
+        url = f"{self.BASE_URL}/{endpoint_path}"
         try:
             response = self.session.request(
                 method,
-                f"{self.BASE_URL}/{path.lstrip('/')}",
+                url,
                 timeout=REQUEST_TIMEOUT,
                 **kwargs,
             )
         except requests.RequestException as exc:
-            raise RuntimeError(f"Tripo request failed: {exc}") from exc
+            # Fallback to secondary endpoint domain if connection failed
+            fallback_url = f"{self.FALLBACK_URL}/{endpoint_path}"
+            try:
+                response = self.session.request(
+                    method,
+                    fallback_url,
+                    timeout=REQUEST_TIMEOUT,
+                    **kwargs,
+                )
+            except requests.RequestException:
+                raise RuntimeError(f"Tripo request failed: {exc}") from exc
         if not response.ok:
             raise RuntimeError(f"Tripo API error ({response.status_code}): {response.text}")
         try:
@@ -176,7 +199,7 @@ class Geekatplay_Tripo_ModelGen:
                 "image_back": ("IMAGE",),
                 "image_right": ("IMAGE",),
                 "model_version": (
-                    ["v3.1-20260211", "P1-20260311", "v3.0-20250812"],
+                    ["v3.1-20260211", "P2-20260801", "P1-20260311", "v3.0-20250812", "v2.5-20250123"],
                     {"default": "v3.1-20260211"},
                 ),
                 "texture_alignment": (
@@ -229,7 +252,7 @@ class Geekatplay_Tripo_ModelGen:
             "enable_image_autofix": enable_image_autofix,
             "export_uv": export_uv,
         }
-        if model_version != "P1-20260311":
+        if model_version not in {"P1-20260311"}:
             options["geometry_quality"] = geometry_quality
             options["quad"] = quad
         if model_seed:
