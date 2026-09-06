@@ -104,7 +104,7 @@ class SaveFakeHDRI:
                 # Method 2: Try ImageIO
                 try:
                     # We try to use imageio. Explicitly providing format="EXR"
-                    imageio.imwrite(filepath, img_output, format="EXR")
+                    imageio.imwrite(filepath, img_output, format="EXR")  # type: ignore
                 except Exception as e:
                     print(f"[SaveFakeHDRI] imageio EXR save failed: {e}. Trying fallback...")
                     # Fallback: try without explicit format or try to catch the PyAV plugin issue
@@ -185,6 +185,8 @@ class ImageTo360Latent:
                 pad_left = pad_w // 2
                 pad_right = pad_w - pad_left
                 img_resized = torch.nn.functional.pad(img_scaled, (pad_left, pad_right, 0, 0), mode='constant', value=0)
+        else:
+            img_resized = torch.nn.functional.interpolate(img_t, size=(height, width), mode="bilinear", align_corners=False)
 
         # 2. Apply Pole Stretcher (Non-linear vertical distortion)
         # Only if power is not 1.0
