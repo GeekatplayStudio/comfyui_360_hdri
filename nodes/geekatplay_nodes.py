@@ -362,40 +362,35 @@ class GapChannelPacker:
     FUNCTION = "pack"
     CATEGORY = "Geekatplay Studio/Core"
 
-    def pack(self, red_channel, green_channel, blue_channel, alpha_channel=None):
+    def pack(self, red_channel: torch.Tensor, green_channel: torch.Tensor, blue_channel: torch.Tensor, alpha_channel: torch.Tensor | None = None):
         # Assuming inputs are [B, H, W, C]
         
-        def get_channel(img):
-            if img is None: return None
-            # If [B, H, W, 3] take first channel
-            if img.shape[-1] == 3:
-                return img[..., 0]
-            # If [B, H, W, 1] take first channel
-            if img.shape[-1] == 1:
+        def get_channel(img: torch.Tensor) -> torch.Tensor:
+            # If [B, H, W, 3] or [B, H, W, 1] take first channel
+            if img.ndim >= 4 and img.shape[-1] >= 1:
                 return img[..., 0]
             return img
         
         # Check shapes match. Use Red as ref
-        B, H, W, _ = red_channel.shape
+        B, H, W = red_channel.shape[0], red_channel.shape[1], red_channel.shape[2]
+        target_shape = (H, W)
         
         # Helper to ensure tensors are same size
-        def resize_to_match(img_t, target_shape):
-            if img_t is None: return None
-            if img_t.shape[1:3] != target_shape:
-                 return F.interpolate(img_t.permute(0,3,1,2), size=target_shape, mode='bilinear').permute(0,2,3,1)
+        def resize_to_match(img_t: torch.Tensor, shape: tuple[int, int]) -> torch.Tensor:
+            if img_t.shape[1:3] != shape:
+                return F.interpolate(img_t.permute(0, 3, 1, 2), size=shape, mode='bilinear').permute(0, 2, 3, 1)
             return img_t
 
-        green_channel = resize_to_match(green_channel, (H, W))
-        blue_channel = resize_to_match(blue_channel, (H, W))
-        if alpha_channel is not None:
-            alpha_channel = resize_to_match(alpha_channel, (H, W))
+        green_matched = resize_to_match(green_channel, target_shape)
+        blue_matched = resize_to_match(blue_channel, target_shape)
 
-        r = get_channel(red_channel)
-        g = get_channel(green_channel)
-        b = get_channel(blue_channel)
+        r: torch.Tensor = get_channel(red_channel)
+        g: torch.Tensor = get_channel(green_matched)
+        b: torch.Tensor = get_channel(blue_matched)
         
         if alpha_channel is not None:
-            a = get_channel(alpha_channel)
+            alpha_matched = resize_to_match(alpha_channel, target_shape)
+            a: torch.Tensor = get_channel(alpha_matched)
             packed = torch.stack([r, g, b, a], dim=-1) # [B, H, W, 4]
         else:
             packed = torch.stack([r, g, b], dim=-1) # [B, H, W, 3]
