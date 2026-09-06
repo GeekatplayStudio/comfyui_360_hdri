@@ -1,6 +1,9 @@
 # (c) Geekatplay Studio
 # ComfyUI-Blender-Toolbox
-import folder_paths
+try:
+    import folder_paths  # type: ignore
+except ImportError:
+    folder_paths = None
 import os
 import torch
 import numpy as np

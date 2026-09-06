@@ -8,7 +8,7 @@ from io import BytesIO
 from urllib.parse import urlparse
 
 try:
-    import folder_paths
+    import folder_paths  # type: ignore
 except ImportError:
     folder_paths = None
 import numpy as np

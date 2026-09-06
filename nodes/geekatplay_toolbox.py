@@ -1,12 +1,31 @@
 import torch
-import comfy.utils
-import comfy.model_management
 import math
 import time
 import sys
 import os
-import folder_paths
 import random
+import tempfile
+
+try:
+    import comfy.utils  # type: ignore
+    import comfy.model_management  # type: ignore
+except ImportError:
+    pass
+
+try:
+    import folder_paths  # type: ignore
+except ImportError:
+    class _FolderPathsFallback:
+        @staticmethod
+        def get_temp_directory():
+            return tempfile.gettempdir()
+        @staticmethod
+        def get_output_directory():
+            return tempfile.gettempdir()
+        @staticmethod
+        def get_input_directory():
+            return tempfile.gettempdir()
+    folder_paths = _FolderPathsFallback()
 
 # Define wildcard type since comfy.utils.ANY is not always available
 class AnyType(str):
@@ -15,13 +34,19 @@ class AnyType(str):
 any_type = AnyType("*")
 
 # For Pauser api
-from server import PromptServer
-from aiohttp import web
+try:
+    from server import PromptServer  # type: ignore
+    from aiohttp import web  # type: ignore
+except ImportError:
+    PromptServer = None
+    web = None
 
 # Global registry for Pauser nodes
 WAITING_NODES = {}
 
 def setup_pauser_routes():
+    if PromptServer is None or not hasattr(PromptServer, "instance") or PromptServer.instance is None:
+        return
     try:
         routes = PromptServer.instance.routes
         # Check if route already exists to avoid dupes on reload

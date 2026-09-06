@@ -29,3 +29,10 @@ Icon = ""
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.pyright]
+include = ["."]
+extraPaths = [".", "nodes", "typings"]
+stubPath = "typings"
+reportMissingImports = "none"
+

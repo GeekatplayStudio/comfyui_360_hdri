@@ -3,7 +3,12 @@ import torch.nn.functional as F
 import numpy as np
 import os
 import sys
-import folder_paths
+try:
+    import folder_paths  # type: ignore
+except ImportError:
+    class _FolderPathsFallback:
+        models_dir = os.path.join(os.path.expanduser("~"), "ComfyUI", "models")
+    folder_paths = _FolderPathsFallback()
 
 class GapSeamlessTiler:
     @classmethod

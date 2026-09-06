@@ -5,7 +5,23 @@ import torch
 import numpy as np
 import imageio
 import os
-import folder_paths
+try:
+    import folder_paths  # type: ignore
+except ImportError:
+    class _FolderPathsFallback:
+        @staticmethod
+        def get_output_directory():
+            return os.path.join(os.path.expanduser("~"), "ComfyUI", "output")
+        @staticmethod
+        def get_input_directory():
+            return os.path.join(os.path.expanduser("~"), "ComfyUI", "input")
+        @staticmethod
+        def get_temp_directory():
+            return os.path.join(os.path.expanduser("~"), "ComfyUI", "temp")
+        @staticmethod
+        def get_save_image_path(filename_prefix, output_dir, image_width=0, image_height=0):
+            return output_dir, filename_prefix, 0, "", filename_prefix
+    folder_paths = _FolderPathsFallback()
 
 class SaveFakeHDRI:
     def __init__(self):

@@ -4,7 +4,20 @@
 import socket
 import os
 import tempfile
-import folder_paths
+try:
+    import folder_paths  # type: ignore
+except ImportError:
+    class _FolderPathsFallback:
+        @staticmethod
+        def get_temp_directory():
+            return tempfile.gettempdir()
+        @staticmethod
+        def get_output_directory():
+            return tempfile.gettempdir()
+        @staticmethod
+        def get_input_directory():
+            return tempfile.gettempdir()
+    folder_paths = _FolderPathsFallback()
 import numpy as np
 import imageio
 import torch
