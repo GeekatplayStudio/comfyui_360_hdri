@@ -564,7 +564,8 @@ class LoadBlenderPBR:
                      i = i.convert("RGB")
                  
                  if target_size and i.size != target_size:
-                     i = i.resize(target_size, Image.LANCZOS)
+                     resample_filter = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else 1
+                     i = i.resize(target_size, resample_filter)
                      
                  image = np.array(i).astype(np.float32) / 255.0
                  return torch.from_numpy(image)[None,]
