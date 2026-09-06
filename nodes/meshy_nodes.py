@@ -7,7 +7,10 @@ import time
 from io import BytesIO
 from urllib.parse import urlparse
 
-import folder_paths
+try:
+    import folder_paths
+except ImportError:
+    folder_paths = None
 import numpy as np
 import requests
 from PIL import Image
@@ -53,7 +56,10 @@ def download_meshy_model(result, task_id, preferred_format="glb", session=None):
             f"Available formats: {', '.join(model_urls) or 'none'}"
         )
 
-    output_dir = os.path.join(folder_paths.get_output_directory(), "meshy_models")
+    if folder_paths and hasattr(folder_paths, "get_output_directory"):
+        output_dir = os.path.join(folder_paths.get_output_directory(), "meshy_models")
+    else:
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output", "meshy_models")
     os.makedirs(output_dir, exist_ok=True)
     safe_task_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id))
     extension = _model_extension(model_url, preferred_format)
@@ -87,7 +93,13 @@ def load_meshy_api_key():
         try:
             from .geekatplay_key_manager import get_key
         except (ImportError, ValueError):
-            from nodes.geekatplay_key_manager import get_key
+            try:
+                from ComfyUI_Blender_toolbox.nodes.geekatplay_key_manager import get_key
+            except (ImportError, ValueError):
+                try:
+                    from nodes.geekatplay_key_manager import get_key
+                except (ImportError, ValueError):
+                    from geekatplay_key_manager import get_key
         keyring_key = get_key("Meshy") or get_key("meshy")
         if keyring_key:
             return keyring_key.strip()

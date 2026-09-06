@@ -2,7 +2,10 @@ import requests
 import json
 import time
 import os
-import folder_paths
+try:
+    import folder_paths
+except ImportError:
+    folder_paths = None
 import numpy as np
 import base64
 from io import BytesIO
@@ -29,7 +32,13 @@ def load_hitem3d_api_key():
         try:
             from .geekatplay_key_manager import get_key
         except (ImportError, ValueError):
-            from nodes.geekatplay_key_manager import get_key
+            try:
+                from ComfyUI_Blender_toolbox.nodes.geekatplay_key_manager import get_key
+            except (ImportError, ValueError):
+                try:
+                    from nodes.geekatplay_key_manager import get_key
+                except (ImportError, ValueError):
+                    from geekatplay_key_manager import get_key
         keyring_key = get_key("Hi3D") or get_key("HiTem3D") or get_key("hi3d") or get_key("hitem3d")
         if keyring_key:
             return keyring_key.strip()
@@ -251,10 +260,12 @@ class Geekatplay_HiTem3D_Gen:
         if not model_url:
             raise Exception(f"No model URL found in HiTem3D response: {list(result.keys())}")
 
-        output_dir = folder_paths.get_output_directory()
+        if folder_paths and hasattr(folder_paths, "get_output_directory"):
+            output_dir = folder_paths.get_output_directory()
+        else:
+            output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")
         hitem_dir = os.path.join(output_dir, "hitem3d_models")
-        if not os.path.exists(hitem_dir):
-            os.makedirs(hitem_dir)
+        os.makedirs(hitem_dir, exist_ok=True)
             
         filename = f"hitem3d_{task_id}.{output_format}"
         filepath = os.path.join(hitem_dir, filename)

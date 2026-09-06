@@ -7,7 +7,10 @@ import time
 from io import BytesIO
 from urllib.parse import urlparse
 
-import folder_paths
+try:
+    import folder_paths
+except ImportError:
+    folder_paths = None
 import numpy as np
 import requests
 import torch
@@ -29,7 +32,13 @@ def load_tripo_api_key():
         try:
             from .geekatplay_key_manager import get_key
         except (ImportError, ValueError):
-            from nodes.geekatplay_key_manager import get_key
+            try:
+                from ComfyUI_Blender_toolbox.nodes.geekatplay_key_manager import get_key
+            except (ImportError, ValueError):
+                try:
+                    from nodes.geekatplay_key_manager import get_key
+                except (ImportError, ValueError):
+                    from geekatplay_key_manager import get_key
         keyring_key = get_key("Tripo") or get_key("Tripo3D") or get_key("tripo")
         if keyring_key:
             return keyring_key.strip()
@@ -161,7 +170,10 @@ class TripoAPI:
         extension = os.path.splitext(urlparse(model_url).path)[1].lower()
         if extension not in {".glb", ".fbx", ".obj", ".stl", ".usdz"}:
             extension = ".glb"
-        output_dir = os.path.join(folder_paths.get_output_directory(), "tripo_models")
+        if folder_paths and hasattr(folder_paths, "get_output_directory"):
+            output_dir = os.path.join(folder_paths.get_output_directory(), "tripo_models")
+        else:
+            output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output", "tripo_models")
         os.makedirs(output_dir, exist_ok=True)
         filepath = os.path.join(output_dir, f"{prefix}_{_safe_task_id(task_id)}{extension}")
         partial = filepath + ".part"
